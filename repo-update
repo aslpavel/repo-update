@@ -94,7 +94,7 @@ def Main ():
     #}}}
 
     console.write (stderr, (':: UPDATE LOCAL REPOSITORY\n', '35'))
-    if not paht.exists (db_path):
+    if not path.exists (db_path):
         console.error ('could not find ', (db_path, '37;01'), '\n')
         sys.exit (1)
 

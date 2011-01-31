@@ -1,0 +1,195 @@
+#! /usr/bin/env python3
+# Author: Pavel Aslanov
+# Description: automaticly update arch linux repository
+# Data: 31/01/2011
+
+import console
+import tarfile
+import itertools
+import sys, os, re
+
+from os import path
+from sys import stdout, stderr, stdin
+from subprocess import *
+
+root_path = path.abspath (path.dirname (sys.argv [0]))
+db_path = path.join (root_path, 'local.db.tar.gz')
+
+class Pkg (object):
+    def __init__ (self, name, version, release, arch = None):
+        self.Name = name
+        self.Version = version
+        self.Release = release
+        self.Arch = arch
+
+    def __repr__ (self):
+        return self.Name
+
+    @property
+    def FileName (self):
+        return '{}-{}-{}-{}.pkg.tar.xz'.format (
+            self.Name, self.Version, self.Release, self.Arch)
+
+    @property
+    def FullName (self):
+        return '{}-{}-{}'.format (self.Name, self.Version, self.Release)
+
+    @property
+    def FullVersion (self):
+        return '{}-{}'.format (self.Version, self.Release)
+
+def Main ():
+    # helpers
+    #{{{ iterate database
+    db_pattern = re.compile ('(.*)-([^-]*)-([^-]*)$')
+    def db_iter ():
+        db = tarfile.open (db_path)
+        for info in db.getmembers ():
+            if info.isdir ():
+                match = db_pattern.match (info.name)
+                if match:
+                    name, version, release = match.groups ()
+                    yield Pkg (name, version, release)
+    #}}}
+    #{{{ iterate repo
+    repo_pattern = re.compile ('(.*)-([^-]*)-([^-]*)-([^-]*).pkg.tar.xz$')
+    def repo_iter ():
+        for pkg in os.listdir (root_path):
+            match = repo_pattern.match (pkg)
+            if match:
+                name, version, release, arch = match.groups ()
+                yield Pkg (name, version, release, arch)
+    #}}}
+    #{{{ diff (ai, bi, keyfunc) -> (a, b, ab)
+    def diff_mapfunc (pair):
+        key, group = pair
+        group = list (group)
+        if len (group) >= 2:
+            return None
+        return group [0]
+
+    def diff (ai, bi, keyfunc):
+        join = list ()
+        join.extend ((a, 0) for a in ai)
+        join.extend ((b, 1) for b in bi)
+
+        a, b, ab = [], [], []
+
+        lkeyfunc = lambda item: keyfunc (item [0])
+        for key, group in itertools.groupby (
+            sorted (join, key = lkeyfunc),
+            lkeyfunc
+        ):
+            group = list (group)
+            if len (group) >= 2:
+                ab.append (group [0][0])
+            else:
+                item, source = group [0]
+                if source == 0:
+                    a.append (item)
+                else:
+                    b.append (item)
+
+        return a, b, ab
+    #}}}
+
+    console.write (stderr, (':: UPDATE LOCAL REPOSITORY\n', '35'))
+    if not paht.exists (db_path):
+        console.error ('could not find ', (db_path, '37;01'), '\n')
+        sys.exit (1)
+
+    # update
+    #{{{ scan for chages
+    modified = []
+    db_mtime = path.getmtime (db_path)
+    with console.pending ((':: scan', '35;01'), ' for changes') as fail:
+        before = list (db_iter ())
+        repo = dict ((p.FullName, p) for p in repo_iter ())
+
+        removed, added, common = diff (before, repo.values (),
+            lambda p: p.FullName)
+        for p in common:
+            p = repo [p.FullName]
+            p_path = path.join (root_path, p.FileName)
+            if path.getmtime (p_path) > db_mtime:
+                modified.append (p)
+    #}}}
+    #{{{ purge broken packages
+    purged = {}
+    if len (removed):
+        console.warning ('broken packages found:\n')
+        for p in removed:
+            stderr.write ('    {}\n'.format (p.FullName))
+        if console.ask ('should i pruge them', default = False):
+            purged = dict ((p.FullName, p) for p in removed)
+            with console.pending ((':: purging', '35;01')) as fail:
+                repo_remove_cmd = ['repo-remove', db_path]
+                repo_remove_cmd.extend (p.Name for p in removed)
+                repo_remove = Popen (repo_remove_cmd, stderr=PIPE, stdout=PIPE)
+                out, error = repo_remove.communicate ()
+                status = repo_remove.wait ()
+                if status != 0:
+                    fail ('status ', (str (status), '37;01'), '\n',
+                        out.decode ('utf-8'))
+                    sys.exit (status)
+    #}}}
+    #{{{ update database
+    if len (modified) + len (added) > 0:
+        with console.pending ((':: update', '35;01'), ' database') as fail:
+            repo_add_cmd = ['repo-add', db_path]
+            repo_add_cmd.extend (
+                path.join(root_path, p.FileName) for p in added)
+            repo_add_cmd.extend (
+                path.join(root_path, p.FileName) for p in modified)
+            repo_add = Popen (repo_add_cmd, stderr = PIPE, stdout = PIPE)
+            out, error = repo_add.communicate ()
+            status = repo_add.wait ()
+            if status != 0:
+                fail ('status ', (str (status), '37;01') ,'\n',
+                    out.decode ('utf-8'))
+                sys.exit (status)
+    #}}}
+    #{{{ clean up orphaned packages
+    after = list (db_iter ())
+    with console.pending ((':: clean', '35;01'), ' orphaned packages') as fail:
+        added, removed, common = diff (after, before, lambda p: p.FullName)
+        try:
+            for p in removed:
+                p = repo.get (p.FullName)
+                if p != None:
+                    os.unlink (path.join (root_path, p.FileName))
+        except OSError as e:
+            fail (e.strerror, ' ', (e.filename, '37;01') ,'\n')
+            sys.exit (e.errno)
+    #}}}
+    #{{{ report
+    before = dict ((p.Name, p) for p in before)
+    after = dict ((p.Name, p) for p in after)
+    added, removed, upgraded = diff (added, removed, lambda p: p.Name)
+    console.write (stderr, (':: report\n', '35'))
+    for p in added:
+        console.write (stderr, ('    + ', '32;01'), p.FullName, '\n')
+    for p in removed:
+        console.write (stderr, ('    - ', '31;01'), p.FullName, '\n')
+    for p in upgraded:
+        console.write (stderr, ('    ^ ', '36;01'), p.Name,
+            (' [ ', '36;01'), before [p.Name].FullVersion,
+            (' -> ', '36;01'), after [p.Name].FullVersion,
+            (' ]\n', '36;01')
+        )
+    for p in modified:
+        console.write (stderr, ('    ~ ', '34;01'), p.FullName, '\n')
+
+    if len (added) + len (removed) + len (upgraded) + len (modified) == 0:
+        console.write (stderr, '    Nothing was changed\n')
+    #}}}
+
+#{{{ .entrypoint
+if __name__ == '__main__':
+    with console.no_echo ():
+        try:
+            Main ()
+        except KeyboardInterrupt:
+            console.error ('interrupted by user\n')
+#}}}
+# vim: ft=python :

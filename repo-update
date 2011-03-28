@@ -1,12 +1,12 @@
 #! /usr/bin/env python3
 # Author: Pavel Aslanov
 # Description: automaticly update arch linux repository
-# Data: 31/01/2011
+# Data: 28/03/2011
 
 import console
 import tarfile
 import itertools
-import sys, os, re
+import sys, os, re, getopt
 
 from os import path
 from sys import stdout, stderr, stdin
@@ -15,8 +15,10 @@ from subprocess import *
 root_path = path.abspath (path.dirname (sys.argv [0]))
 db_path = path.join (root_path, 'local.db.tar.gz')
 
+# classes
+#{{{ Pkg
 class Pkg (object):
-    def __init__ (self, name, version, release, arch = None):
+    def __init__ (self, name, version, release, arch = 'any'):
         self.Name = name
         self.Version = version
         self.Release = release
@@ -37,20 +39,57 @@ class Pkg (object):
     @property
     def FullVersion (self):
         return '{}-{}'.format (self.Version, self.Release)
+#}}}
 
-def Main ():
+# utils
+#{{{ diff (ai, bi, keyfunc) -> (a, b, ab)
+def diff (ai, bi, keyfunc):
+    join = list ()
+    join.extend ((a, 0) for a in ai)
+    join.extend ((b, 1) for b in bi)
+
+    a, b, ab = [], [], []
+
+    lkeyfunc = lambda item: keyfunc (item [0])
+    for key, group in itertools.groupby (
+        sorted (join, key = lkeyfunc),
+        lkeyfunc
+    ):
+        group = list (group)
+        if len (group) >= 2:
+            ab.append (group [0][0])
+        else:
+            item, source = group [0]
+            if source == 0:
+                a.append (item)
+            else:
+                b.append (item)
+
+    return a, b, ab
+#}}}
+#{{{ db_iter () # iterate database
+db_pattern = re.compile ('(.*)-([^-]*)-([^-]*)$')
+def db_iter ():
+    db = tarfile.open (db_path)
+    for info in db.getmembers ():
+        if info.isdir ():
+            match = db_pattern.match (info.name)
+            if match:
+                name, version, release = match.groups ()
+                yield Pkg (name, version, release)
+#}}}
+
+# functions
+#{{{ Usage
+def Usage ():
+    sys.stderr.write ('Usage: {0} [options]\n'
+        .format (path.basename (sys.argv [0])))
+    sys.stderr.write ('    -l    : list installed packages\n')
+    sys.stderr.write ('    -h|-? : print this help message\n')
+#}}}
+#{{{ Update
+def Update ():
     # helpers
-    #{{{ iterate database
-    db_pattern = re.compile ('(.*)-([^-]*)-([^-]*)$')
-    def db_iter ():
-        db = tarfile.open (db_path)
-        for info in db.getmembers ():
-            if info.isdir ():
-                match = db_pattern.match (info.name)
-                if match:
-                    name, version, release = match.groups ()
-                    yield Pkg (name, version, release)
-    #}}}
     #{{{ iterate repo
     repo_pattern = re.compile ('(.*)-([^-]*)-([^-]*)-([^-]*).pkg.tar.xz$')
     def repo_iter ():
@@ -59,38 +98,6 @@ def Main ():
             if match:
                 name, version, release, arch = match.groups ()
                 yield Pkg (name, version, release, arch)
-    #}}}
-    #{{{ diff (ai, bi, keyfunc) -> (a, b, ab)
-    def diff_mapfunc (pair):
-        key, group = pair
-        group = list (group)
-        if len (group) >= 2:
-            return None
-        return group [0]
-
-    def diff (ai, bi, keyfunc):
-        join = list ()
-        join.extend ((a, 0) for a in ai)
-        join.extend ((b, 1) for b in bi)
-
-        a, b, ab = [], [], []
-
-        lkeyfunc = lambda item: keyfunc (item [0])
-        for key, group in itertools.groupby (
-            sorted (join, key = lkeyfunc),
-            lkeyfunc
-        ):
-            group = list (group)
-            if len (group) >= 2:
-                ab.append (group [0][0])
-            else:
-                item, source = group [0]
-                if source == 0:
-                    a.append (item)
-                else:
-                    b.append (item)
-
-        return a, b, ab
     #}}}
 
     console.write (stderr, (':: UPDATE LOCAL REPOSITORY\n', '35'))
@@ -183,6 +190,65 @@ def Main ():
     if len (added) + len (removed) + len (upgraded) + len (modified) == 0:
         console.write (stderr, '    Nothing was changed\n')
     #}}}
+#}}}
+#{{{ List
+def List ():
+    #{{{ query pacman
+    pacman_proc = Popen (['pacman', '-Q'], stdout = PIPE, stderr = PIPE)
+    stdout, stderr = pacman_proc.communicate ()
+    if len (stderr):
+        for line in stderr.splitlines ():
+            console.write (sys.stderr, (':: [pacman]', '31;01'),
+                ' {0}\n'.format (line.decode ('utf-8')))
+    if pacman_proc.returncode != 0:
+        console.write (sys.stderr, (':: [pacman:status] ', '31;01'),
+            'terminated with status {0}\n'.format (pacman_proc.returncode))
+        sys.exit (1)
+
+    def pacman_iter ():
+        for line in stdout.splitlines ():
+            name, full_version = line.decode ('utf-8').split ()
+            version, release = full_version.split ('-')
+            yield Pkg (name, version, release)
+    #}}}
+
+    in_db, in_pacman, in_common = diff (db_iter (), pacman_iter (),
+        lambda pkg: pkg.Name)
+    pkgs = sorted (itertools.chain (((pkg, False) for pkg in in_db),
+        ((pkg, True) for pkg in in_common)), key = lambda p: p [0].Name)
+
+    for pkg, installed in pkgs:
+        if installed:
+            console.write (sys.stdout, ('+ {0} '.format (pkg.Name), '35;01'))
+        else:
+            console.write (sys.stdout, ('- {0} '.format (pkg.Name), '35'))
+        console.write (sys.stdout, ' {0}\n'.format (pkg.FullVersion))
+#}}}
+
+def Main ():
+    #{{{ parse options
+    try:
+        opts, args = getopt.getopt (sys.argv [1:], 'lh?', [])
+    except getopt.GetoptError as e:
+        console.error ('{0}\n'.format (e))
+        Usage ()
+        sys.exit (1)
+
+    list_mode = False
+    for o, a in opts:
+        if o == '-l':
+            list_mode = True
+        elif o in ('-h', '-?'):
+            Usage ()
+            sys.exit (0)
+        else:
+            assert False, 'unhandled option'
+    #}}}
+
+    if list_mode:
+        List ()
+    else:
+        Update ()
 
 #{{{ .entrypoint
 if __name__ == '__main__':

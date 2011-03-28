@@ -86,8 +86,8 @@ def Usage ():
     sys.stderr.write ('    -l    : list mode\n')
     sys.stderr.write ('    -h|-? : print this help message\n')
     sys.stderr.write ('[list mode]\n')
-    sys.stderr.write ('    -i    : don\'t not installed packaegs\n')
-    sys.stderr.write ('    -n    : don\'t show installed packages\n')
+    sys.stderr.write ('    -n    : supress not istalled installed packaegs\n')
+    sys.stderr.write ('    -i    : supress installed packages\n')
 #}}}
 #{{{ Update (db_path)
 def Update (db_path):

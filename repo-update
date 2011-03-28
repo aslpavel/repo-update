@@ -13,7 +13,6 @@ from sys import stdout, stderr, stdin
 from subprocess import *
 
 root_path = path.abspath (path.dirname (sys.argv [0]))
-db_path = path.join (root_path, 'local.db.tar.gz')
 
 # classes
 #{{{ Pkg
@@ -67,9 +66,9 @@ def diff (ai, bi, keyfunc):
 
     return a, b, ab
 #}}}
-#{{{ db_iter () # iterate database
+#{{{ db_iter (db_path) # iterate database
 db_pattern = re.compile ('(.*)-([^-]*)-([^-]*)$')
-def db_iter ():
+def db_iter (db_path):
     db = tarfile.open (db_path)
     for info in db.getmembers ():
         if info.isdir ():
@@ -88,7 +87,7 @@ def Usage ():
     sys.stderr.write ('    -h|-? : print this help message\n')
 #}}}
 #{{{ Update
-def Update ():
+def Update (db_path):
     # helpers
     #{{{ iterate repo
     repo_pattern = re.compile ('(.*)-([^-]*)-([^-]*)-([^-]*).pkg.tar.xz$')
@@ -110,7 +109,7 @@ def Update ():
     modified = []
     db_mtime = path.getmtime (db_path)
     with console.pending ((':: scan', '35;01'), ' for changes') as fail:
-        before = list (db_iter ())
+        before = list (db_iter (db_path))
         repo = dict ((p.FullName, p) for p in repo_iter ())
 
         removed, added, common = diff (before, repo.values (),
@@ -157,7 +156,7 @@ def Update ():
                 sys.exit (status)
     #}}}
     #{{{ clean up orphaned packages
-    after = list (db_iter ())
+    after = list (db_iter (db_path))
     with console.pending ((':: clean', '35;01'), ' orphaned packages') as fail:
         added, removed, common = diff (after, before, lambda p: p.FullName)
         try:
@@ -192,7 +191,7 @@ def Update ():
     #}}}
 #}}}
 #{{{ List
-def List ():
+def List (db_path):
     #{{{ query pacman
     pacman_proc = Popen (['pacman', '-Q'], stdout = PIPE, stderr = PIPE)
     stdout, stderr = pacman_proc.communicate ()
@@ -212,8 +211,8 @@ def List ():
             yield Pkg (name, version, release)
     #}}}
 
-    in_db, in_pacman, in_common = diff (db_iter (), pacman_iter (),
-        lambda pkg: pkg.Name)
+    in_db, in_pacman, in_common = diff (db_iter (db_path), pacman_iter (),
+        lambda pkg: pkg.FullName)
     pkgs = sorted (itertools.chain (((pkg, False) for pkg in in_db),
         ((pkg, True) for pkg in in_common)), key = lambda p: p [0].Name)
 
@@ -222,10 +221,24 @@ def List ():
             console.write (sys.stdout, ('+ {0} '.format (pkg.Name), '35;01'))
         else:
             console.write (sys.stdout, ('- {0} '.format (pkg.Name), '35'))
-        console.write (sys.stdout, ' {0}\n'.format (pkg.FullVersion))
+        console.write (sys.stdout, '{0}\n'.format (pkg.FullVersion))
 #}}}
 
 def Main ():
+    #{{{ repository database
+    db_path = None
+    for file in os.listdir (root_path):
+        if file.endswith ('db.tar.gz'):
+            db_path = path.join (root_path , file)
+    if db_path == None:
+        console.error ('no repository db file found')
+        sys.exit (1)
+
+    if not os.access (db_path, os.R_OK | os.W_OK):
+        console.error ('repository db file ', (path.basename (db_path),'37;01'),
+            ' is inaccessible\n')
+        sys.exit (1)
+    #}}}
     #{{{ parse options
     try:
         opts, args = getopt.getopt (sys.argv [1:], 'lh?', [])
@@ -246,9 +259,9 @@ def Main ():
     #}}}
 
     if list_mode:
-        List ()
+        List (db_path)
     else:
-        Update ()
+        Update (db_path)
 
 #{{{ .entrypoint
 if __name__ == '__main__':

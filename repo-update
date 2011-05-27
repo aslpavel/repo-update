@@ -219,6 +219,7 @@ def List (db_path, opts = 3):
     pkgs = sorted (itertools.chain (((pkg, False) for pkg in in_db),
         ((pkg, True) for pkg in in_common)), key = lambda p: p [0].Name)
 
+    width = console.width ()
     for pkg, installed in pkgs:
         if installed:
             if not (opts & 1):
@@ -228,7 +229,9 @@ def List (db_path, opts = 3):
             if not (opts & 2):
                 continue
             console.write (sys.stdout, ('- {0} '.format (pkg.Name), '35'))
-        console.write (sys.stdout, '{0}\n'.format (pkg.FullVersion))
+        if sys.stdout.isatty ():
+            console.write (sys.stdout, ' ' * (width - len (pkg.Name) - 19))
+        console.write (sys.stdout, '{0:<15}\n'.format (pkg.FullVersion))
 #}}}
 
 def Main ():

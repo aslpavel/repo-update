@@ -230,8 +230,8 @@ def List (db_path, opts = 3):
                 continue
             console.write (sys.stdout, ('- {0} '.format (pkg.Name), '35'))
         if sys.stdout.isatty ():
-            console.write (sys.stdout, ' ' * (width - len (pkg.Name) - 19))
-        console.write (sys.stdout, '{0:<15}\n'.format (pkg.FullVersion))
+            console.write (sys.stdout, ' ' * (width - len (pkg.Name) - 24))
+        console.write (sys.stdout, '{0:<20}\n'.format (pkg.FullVersion))
 #}}}
 
 def Main ():
